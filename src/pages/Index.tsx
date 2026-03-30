@@ -6,7 +6,7 @@ import ChatRoomPage from './ChatRoom';
 import ProfilePage from './Profile';
 import SettingsPage from './Settings';
 import SecurityPage from './Security';
-import { getCurrentUser } from '@/lib/store';
+import { getSessionLogin } from '@/lib/api';
 
 export type Screen =
   | 'login'
@@ -23,7 +23,7 @@ export default function Index() {
   const [currentUser, setCurrentUser] = useState<string | null>(null);
 
   useEffect(() => {
-    const user = getCurrentUser();
+    const user = getSessionLogin();
     if (user) {
       setCurrentUser(user);
       setScreen('chats');

@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { getUser, saveUser, TEXT_COLORS } from '@/lib/store';
+import { TEXT_COLORS } from '@/lib/store';
+import { apiUpdateColor } from '@/lib/api';
 import BottomNav from '@/components/BottomNav';
 import { Screen } from './Index';
 import Icon from '@/components/ui/icon';
@@ -10,17 +11,27 @@ interface SettingsPageProps {
 }
 
 export default function SettingsPage({ currentUser, navigate }: SettingsPageProps) {
-  const user = getUser(currentUser);
-  const [selectedColor, setSelectedColor] = useState(user?.textColor || '#2c1f0e');
+  const initialColor = localStorage.getItem(`folio_color_${currentUser}`) || '#2c1f0e';
+  const [selectedColor, setSelectedColor] = useState(initialColor);
   const [saved, setSaved] = useState(false);
+  const [saveError, setSaveError] = useState('');
+  const [saving, setSaving] = useState(false);
   const [previewText, setPreviewText] = useState('Пример текста в беседе...');
 
-  if (!user) return null;
-
-  const handleSaveColor = () => {
-    saveUser({ ...user, textColor: selectedColor });
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
+  const handleSaveColor = async () => {
+    setSaving(true);
+    setSaveError('');
+    setSaved(false);
+    try {
+      await apiUpdateColor(selectedColor);
+      localStorage.setItem(`folio_color_${currentUser}`, selectedColor);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2500);
+    } catch {
+      setSaveError('Не удалось сохранить');
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -89,7 +100,9 @@ export default function SettingsPage({ currentUser, navigate }: SettingsPageProp
               className="rounded-sm p-3"
               style={{ background: 'var(--sepia-mid)', border: '1px solid var(--sepia-dark)' }}
             >
-              <p className="text-xs font-cormorant text-ink-faded mb-2 uppercase tracking-widest">Предпросмотр</p>
+              <p className="text-xs font-cormorant text-ink-faded mb-2 uppercase tracking-widest">
+                Предпросмотр
+              </p>
               <div className="message-bubble-out inline-block px-4 py-2.5 max-w-full">
                 <p className="font-cormorant text-base" style={{ color: 'var(--parchment)' }}>
                   Ваш текст в беседе
@@ -106,11 +119,32 @@ export default function SettingsPage({ currentUser, navigate }: SettingsPageProp
               </div>
             </div>
 
+            {saveError && (
+              <p className="text-aged-red text-sm font-cormorant italic animate-fade-in">
+                {saveError}
+              </p>
+            )}
+
             <button
               onClick={handleSaveColor}
-              className={`ink-btn w-full py-3 rounded-sm transition-all ${saved ? 'opacity-80' : ''}`}
+              disabled={saving}
+              className={`ink-btn w-full py-3 rounded-sm transition-all flex items-center justify-center gap-2 ${
+                saved ? 'opacity-80' : ''
+              }`}
             >
-              {saved ? '✓ Сохранено' : 'Сохранить цвет чернил'}
+              {saving ? (
+                <>
+                  <Icon name="Loader" size={14} className="animate-spin" />
+                  Сохраняем...
+                </>
+              ) : saved ? (
+                <>
+                  <Icon name="Check" size={14} />
+                  Сохранено
+                </>
+              ) : (
+                'Сохранить цвет чернил'
+              )}
             </button>
           </div>
         </div>
@@ -149,7 +183,9 @@ export default function SettingsPage({ currentUser, navigate }: SettingsPageProp
                   style={{ background: '#1e4a2e', border: '1px solid #2e5c3e' }}
                 >
                   <Icon name="Check" size={10} style={{ color: '#a8d5b5' }} />
-                  <span className="text-[10px] font-cormorant" style={{ color: '#a8d5b5' }}>Вкл</span>
+                  <span className="text-[10px] font-cormorant" style={{ color: '#a8d5b5' }}>
+                    Вкл
+                  </span>
                 </div>
               </div>
             ))}
@@ -163,10 +199,10 @@ export default function SettingsPage({ currentUser, navigate }: SettingsPageProp
         >
           <p className="font-uncial text-ink text-base tracking-wider">Фолиант</p>
           <p className="font-cormorant text-ink-faded text-xs italic mt-1">
-            Тайный мессенджер · Версия 1.0
+            Тайный мессенджер · Версия 2.0
           </p>
           <p className="font-cormorant text-ink-faded text-xs mt-2">
-            Все данные хранятся на вашем устройстве
+            Данные хранятся на защищённом сервере
           </p>
         </div>
       </div>

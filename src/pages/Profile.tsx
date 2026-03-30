@@ -1,4 +1,5 @@
-import { getUser, getChats } from '@/lib/store';
+import { useState, useEffect } from 'react';
+import { apiGetChats, apiGetUser, apiLogout, ServerChat } from '@/lib/api';
 import BottomNav from '@/components/BottomNav';
 import { Screen } from './Index';
 import Icon from '@/components/ui/icon';
@@ -10,13 +11,20 @@ interface ProfilePageProps {
 }
 
 export default function ProfilePage({ currentUser, navigate, onLogout }: ProfilePageProps) {
-  const user = getUser(currentUser);
-  const chats = getChats();
-  const myChats = chats.filter(c => c.participants.includes(currentUser));
+  const [chats, setChats] = useState<ServerChat[]>([]);
+  const [createdAt, setCreatedAt] = useState<number>(Date.now());
 
-  if (!user) return null;
+  useEffect(() => {
+    apiGetChats().then(setChats).catch(() => {});
+    apiGetUser(currentUser).then(u => { if (u.createdAt) setCreatedAt(u.createdAt); }).catch(() => {});
+  }, [currentUser]);
 
-  const created = new Date(user.createdAt).toLocaleDateString('ru', {
+  const handleLogout = async () => {
+    await apiLogout();
+    onLogout();
+  };
+
+  const created = new Date(createdAt).toLocaleDateString('ru', {
     day: 'numeric', month: 'long', year: 'numeric'
   });
 
@@ -38,10 +46,10 @@ export default function ProfilePage({ currentUser, navigate, onLogout }: Profile
             className="w-20 h-20 rounded-sm flex items-center justify-center text-4xl font-fell"
             style={{ background: 'var(--sepia-dark)', color: 'var(--ink)' }}
           >
-            {user.login.charAt(0).toUpperCase()}
+            {currentUser.charAt(0).toUpperCase()}
           </div>
           <div className="text-center">
-            <p className="font-fell text-2xl text-ink">{user.login}</p>
+            <p className="font-fell text-2xl text-ink">{currentUser}</p>
             <p className="font-cormorant text-ink-faded text-sm italic mt-1">
               Зарегистрирован {created}
             </p>
@@ -58,7 +66,7 @@ export default function ProfilePage({ currentUser, navigate, onLogout }: Profile
             className="rounded-sm p-4 text-center"
             style={{ background: 'var(--sepia-mid)', border: '1px solid var(--sepia-dark)' }}
           >
-            <p className="font-fell text-3xl text-ink">{myChats.length}</p>
+            <p className="font-fell text-3xl text-ink">{chats.length}</p>
             <p className="font-cormorant text-ink-faded text-xs tracking-wide uppercase mt-1">Активных бесед</p>
           </div>
           <div
@@ -113,7 +121,7 @@ export default function ProfilePage({ currentUser, navigate, onLogout }: Profile
             <Icon name="ChevronRight" size={14} className="text-ink-faded ml-auto" />
           </button>
           <button
-            onClick={onLogout}
+            onClick={handleLogout}
             className="w-full px-4 py-4 flex items-center gap-3 hover:bg-sepia-mid transition-colors text-left"
             style={{ background: 'var(--parchment)' }}
           >

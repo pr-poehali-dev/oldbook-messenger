@@ -1,8 +1,14 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import {
-  getMessages, saveMessage, clearChatMessages, getChats, saveChat,
-  getUser, formatTime, formatTimeLeft, Message, Chat, encryptText, decryptText, TEXT_COLORS
-} from '@/lib/store';
+  apiGetMessages,
+  apiSendMessage,
+  apiClearChat,
+  apiGetChats,
+  ServerMessage,
+  ServerChat,
+} from '@/lib/api';
+import { encryptText, decryptText, formatTime, formatTimeLeft } from '@/lib/store';
+import { useNotifications } from '@/hooks/useNotifications';
 import Icon from '@/components/ui/icon';
 
 interface ChatRoomProps {
@@ -12,70 +18,120 @@ interface ChatRoomProps {
 }
 
 export default function ChatRoomPage({ chatId, currentUser, onBack }: ChatRoomProps) {
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [chat, setChat] = useState<Chat | null>(null);
+  const [messages, setMessages] = useState<(ServerMessage & { displayText: string })[]>([]);
+  const [chat, setChat] = useState<ServerChat | null>(null);
   const [text, setText] = useState('');
   const [showMenu, setShowMenu] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [chatNotFound, setChatNotFound] = useState(false);
+  const sinceRef = useRef<number>(0);
   const bottomRef = useRef<HTMLDivElement>(null);
-  const user = getUser(currentUser);
-  const userColor = user?.textColor || '#2c1f0e';
+  const { playSound } = useNotifications();
 
-  const loadMessages = () => {
-    const msgs = getMessages(chatId);
-    // Декрипт для показа
-    const decrypted = msgs.map(m => ({
-      ...m,
-      text: m.encrypted ? decryptText(m.text, chatId) : m.text,
-    }));
-    setMessages(decrypted);
-  };
+  const userColor = localStorage.getItem(`folio_color_${currentUser}`) || '#2c1f0e';
 
-  const loadChat = () => {
-    const chats = getChats();
-    const c = chats.find(c => c.id === chatId) || null;
-    setChat(c);
-  };
+  const loadChat = useCallback(async () => {
+    try {
+      const chats = await apiGetChats();
+      const found = chats.find(c => c.id === chatId) || null;
+      if (!found) {
+        setChatNotFound(true);
+      } else {
+        setChat(found);
+      }
+    } catch {
+      // ignore
+    }
+  }, [chatId]);
+
+  const loadMessages = useCallback(async () => {
+    try {
+      const newMsgs = await apiGetMessages(chatId, sinceRef.current);
+      if (newMsgs.length === 0) return;
+
+      const decoded = newMsgs.map(m => ({
+        ...m,
+        displayText: m.encrypted ? decryptText(m.text, chatId) : m.text,
+      }));
+
+      // Play sound for messages from other users
+      const foreign = decoded.filter(m => m.senderId !== currentUser);
+      if (foreign.length > 0) {
+        playSound('message');
+      }
+
+      setMessages(prev => {
+        // Merge by id to avoid duplicates
+        const existingIds = new Set(prev.map(m => m.id));
+        const fresh = decoded.filter(m => !existingIds.has(m.id));
+        return [...prev, ...fresh].sort((a, b) => a.timestamp - b.timestamp);
+      });
+
+      // Update since to the latest timestamp
+      const maxTs = Math.max(...newMsgs.map(m => m.timestamp));
+      if (maxTs > sinceRef.current) {
+        sinceRef.current = maxTs;
+      }
+    } catch {
+      // ignore polling errors
+    }
+  }, [chatId, currentUser, playSound]);
 
   useEffect(() => {
-    loadMessages();
+    sinceRef.current = 0;
+    setMessages([]);
+    setChatNotFound(false);
     loadChat();
-    const t = setInterval(() => { loadMessages(); loadChat(); }, 5000);
-    return () => clearInterval(t);
+    loadMessages();
+    const interval = setInterval(loadMessages, 3000);
+    return () => clearInterval(interval);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chatId]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  const sendMessage = () => {
-    if (!text.trim()) return;
-    const encrypted = encryptText(text.trim(), chatId);
-    const msg: Message = {
-      id: `msg_${Date.now()}_${Math.random().toString(36).slice(2)}`,
-      chatId,
-      senderId: currentUser,
-      text: encrypted,
-      color: userColor,
-      timestamp: Date.now(),
-      encrypted: true,
-    };
-    saveMessage(msg);
-
-    // Update last message in chat
-    if (chat) {
-      saveChat({ ...chat, lastMessage: text.trim().slice(0, 50), lastMessageTime: Date.now() });
-    }
-
+  const sendMessage = async () => {
+    if (!text.trim() || sending) return;
+    const rawText = text.trim();
+    setSending(true);
     setText('');
-    loadMessages();
+    try {
+      const encrypted = encryptText(rawText, chatId);
+      await apiSendMessage(chatId, encrypted, userColor, true);
+      // Immediately append an optimistic local copy
+      const optimistic: ServerMessage & { displayText: string } = {
+        id: `optimistic_${Date.now()}`,
+        chatId,
+        senderId: currentUser,
+        text: encrypted,
+        displayText: rawText,
+        color: userColor,
+        encrypted: true,
+        timestamp: Date.now(),
+      };
+      setMessages(prev => [...prev, optimistic]);
+      // Reload to get server-assigned id
+      await loadMessages();
+    } catch {
+      // Restore text on failure
+      setText(rawText);
+    } finally {
+      setSending(false);
+    }
   };
 
-  const handleClear = () => {
-    if (confirm('Удалить все сообщения в этой беседе?')) {
-      clearChatMessages(chatId);
-      loadMessages();
-      setShowMenu(false);
+  const handleClear = async () => {
+    if (!confirm('Удалить все сообщения в этой беседе?')) return;
+    try {
+      await apiClearChat(chatId);
+      setMessages([]);
+      sinceRef.current = 0;
+    } catch {
+      // ignore
     }
+    setShowMenu(false);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -85,16 +141,18 @@ export default function ChatRoomPage({ chatId, currentUser, onBack }: ChatRoomPr
     }
   };
 
-  if (!chat) {
+  if (chatNotFound) {
     return (
       <div className="screen parchment-bg flex flex-col items-center justify-center">
         <p className="font-fell text-ink-faded text-xl">Беседа не найдена</p>
-        <button className="ghost-btn mt-4 px-6 py-2 rounded-sm" onClick={onBack}>Назад</button>
+        <button className="ghost-btn mt-4 px-6 py-2 rounded-sm" onClick={onBack}>
+          Назад
+        </button>
       </div>
     );
   }
 
-  const timeLeft = formatTimeLeft(chat.expiresAt);
+  const timeLeft = chat ? formatTimeLeft(chat.expiresAt) : '...';
 
   return (
     <div className="screen flex flex-col" style={{ background: 'var(--sepia-light)' }}>
@@ -112,16 +170,18 @@ export default function ChatRoomPage({ chatId, currentUser, onBack }: ChatRoomPr
           className="w-10 h-10 rounded-sm flex items-center justify-center text-base font-fell shrink-0"
           style={{ background: 'var(--sepia-dark)', color: 'var(--ink)' }}
         >
-          {chat.name.charAt(0).toUpperCase()}
+          {chat ? chat.name.charAt(0).toUpperCase() : '?'}
         </div>
 
         <div className="flex-1 min-w-0">
           <p className="font-cormorant font-semibold text-sepia-light text-base truncate">
-            {chat.name}
+            {chat ? chat.name : '...'}
           </p>
           <div className="flex items-center gap-1">
             <Icon name="Clock" size={10} className="text-ink-faded" />
-            <span className="text-xs font-cormorant text-ink-faded">истекает через {timeLeft}</span>
+            <span className="text-xs font-cormorant text-ink-faded">
+              истекает через {timeLeft}
+            </span>
           </div>
         </div>
 
@@ -139,26 +199,36 @@ export default function ChatRoomPage({ chatId, currentUser, onBack }: ChatRoomPr
 
       {/* Menu dropdown */}
       {showMenu && (
-        <div
-          className="absolute top-24 right-4 z-50 rounded-sm shadow-xl animate-fade-in overflow-hidden"
-          style={{ background: 'var(--parchment)', border: '1px solid var(--sepia-dark)', minWidth: 180 }}
-        >
-          <button
-            className="w-full px-4 py-3 text-left font-cormorant text-sm text-aged-red flex items-center gap-2 hover:bg-sepia-mid transition-colors"
-            onClick={handleClear}
-          >
-            <Icon name="Trash2" size={14} />
-            Удалить все сообщения
-          </button>
-          <div style={{ borderTop: '1px solid var(--sepia-mid)' }} />
-          <button
-            className="w-full px-4 py-3 text-left font-cormorant text-sm text-ink-light flex items-center gap-2 hover:bg-sepia-mid transition-colors"
+        <>
+          <div
+            className="fixed inset-0 z-40"
             onClick={() => setShowMenu(false)}
+          />
+          <div
+            className="absolute top-24 right-4 z-50 rounded-sm shadow-xl animate-fade-in overflow-hidden"
+            style={{
+              background: 'var(--parchment)',
+              border: '1px solid var(--sepia-dark)',
+              minWidth: 180,
+            }}
           >
-            <Icon name="Shield" size={14} />
-            E2E шифрование активно
-          </button>
-        </div>
+            <button
+              className="w-full px-4 py-3 text-left font-cormorant text-sm text-aged-red flex items-center gap-2 hover:bg-sepia-mid transition-colors"
+              onClick={handleClear}
+            >
+              <Icon name="Trash2" size={14} />
+              Удалить все сообщения
+            </button>
+            <div style={{ borderTop: '1px solid var(--sepia-mid)' }} />
+            <button
+              className="w-full px-4 py-3 text-left font-cormorant text-sm text-ink-light flex items-center gap-2 hover:bg-sepia-mid transition-colors"
+              onClick={() => setShowMenu(false)}
+            >
+              <Icon name="Shield" size={14} />
+              E2E шифрование активно
+            </button>
+          </div>
+        </>
       )}
 
       {/* Messages */}
@@ -175,17 +245,27 @@ export default function ChatRoomPage({ chatId, currentUser, onBack }: ChatRoomPr
 
         {messages.map((msg, i) => {
           const isOwn = msg.senderId === currentUser;
-          const showDate = i === 0 || formatTime(messages[i - 1].timestamp) !== formatTime(msg.timestamp);
+          const showDateLabel =
+            i === 0 ||
+            new Date(messages[i - 1].timestamp).toDateString() !==
+              new Date(msg.timestamp).toDateString();
 
           return (
             <div key={msg.id} className="flex flex-col">
-              {showDate && i === 0 && (
+              {showDateLabel && i === 0 && (
                 <div className="ornament-line text-xs text-ink-faded mb-2">сегодня</div>
               )}
               <div className={`flex ${isOwn ? 'justify-end' : 'justify-start'}`}>
-                <div className={`max-w-[78%] px-4 py-2.5 ${isOwn ? 'message-bubble-out' : 'message-bubble-in'}`}>
+                <div
+                  className={`max-w-[78%] px-4 py-2.5 ${
+                    isOwn ? 'message-bubble-out' : 'message-bubble-in'
+                  }`}
+                >
                   {!isOwn && (
-                    <p className="text-xs font-cormorant font-semibold mb-1" style={{ color: 'var(--sepia-deep)' }}>
+                    <p
+                      className="text-xs font-cormorant font-semibold mb-1"
+                      style={{ color: 'var(--sepia-deep)' }}
+                    >
                       {msg.senderId}
                     </p>
                   )}
@@ -193,9 +273,13 @@ export default function ChatRoomPage({ chatId, currentUser, onBack }: ChatRoomPr
                     className="font-cormorant text-base leading-snug"
                     style={{ color: isOwn ? 'var(--parchment)' : msg.color }}
                   >
-                    {msg.text}
+                    {msg.displayText}
                   </p>
-                  <p className={`text-[10px] font-cormorant mt-1 text-right ${isOwn ? 'text-sepia-dark opacity-70' : 'text-ink-faded'}`}>
+                  <p
+                    className={`text-[10px] font-cormorant mt-1 text-right ${
+                      isOwn ? 'text-sepia-dark opacity-70' : 'text-ink-faded'
+                    }`}
+                  >
                     {formatTime(msg.timestamp)}
                   </p>
                 </div>
@@ -222,10 +306,11 @@ export default function ChatRoomPage({ chatId, currentUser, onBack }: ChatRoomPr
           onChange={e => setText(e.target.value)}
           onKeyDown={handleKeyDown}
           rows={1}
+          disabled={sending}
         />
         <button
           onClick={sendMessage}
-          disabled={!text.trim()}
+          disabled={!text.trim() || sending}
           className="w-11 h-11 rounded-sm flex items-center justify-center transition-all active:scale-90 disabled:opacity-40"
           style={{
             background: 'var(--ink)',

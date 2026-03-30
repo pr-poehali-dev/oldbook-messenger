@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import PinInput from '@/components/PinInput';
-import { getUser, saveUser, hashPin, setCurrentUser } from '@/lib/store';
+import { hashPin } from '@/lib/store';
+import { apiRegister } from '@/lib/api';
 import Icon from '@/components/ui/icon';
 
 interface RegisterPageProps {
@@ -25,12 +26,12 @@ export default function RegisterPage({ onRegistered, onBack }: RegisterPageProps
   const [question, setQuestion] = useState(SECURITY_QUESTIONS[0]);
   const [answer, setAnswer] = useState('');
   const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
 
   const handleLoginNext = () => {
     const trimmed = login.trim();
     if (trimmed.length < 3) { setError('Минимум 3 символа'); return; }
     if (trimmed.length > 20) { setError('Максимум 20 символов'); return; }
-    if (getUser(trimmed)) { setError('Имя уже занято'); return; }
     setError('');
     setStep('pin');
   };
@@ -50,19 +51,36 @@ export default function RegisterPage({ onRegistered, onBack }: RegisterPageProps
     setStep('question');
   };
 
-  const handleFinish = () => {
+  const handleFinish = async () => {
     if (!answer.trim()) { setError('Введите ответ на вопрос'); return; }
-    const user = {
-      login: login.trim(),
-      pinHash: hashPin(pin),
-      securityQuestion: question,
-      securityAnswer: answer.trim().toLowerCase(),
-      textColor: '#2c1f0e',
-      createdAt: Date.now(),
-    };
-    saveUser(user);
-    setCurrentUser(user.login);
-    onRegistered(user.login);
+    setLoading(true);
+    setError('');
+    try {
+      const data = await apiRegister({
+        login: login.trim(),
+        pinHash: hashPin(pin),
+        securityQuestion: question,
+        securityAnswer: answer.trim().toLowerCase(),
+        textColor: '#2c1f0e',
+      });
+      localStorage.setItem(`folio_color_${data.login}`, '#2c1f0e');
+      onRegistered(data.login);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (
+        msg.toLowerCase().includes('занят') ||
+        msg.toLowerCase().includes('exists') ||
+        msg.toLowerCase().includes('already') ||
+        msg.toLowerCase().includes('409')
+      ) {
+        setError('Логин уже занят');
+        setStep('login');
+      } else {
+        setError('Ошибка регистрации: ' + msg);
+      }
+    } finally {
+      setLoading(false);
+    }
   };
 
   const steps = ['login', 'pin', 'confirm', 'question'];
@@ -74,6 +92,7 @@ export default function RegisterPage({ onRegistered, onBack }: RegisterPageProps
         <button
           onClick={onBack}
           className="flex items-center gap-2 text-ink-faded hover:text-sepia-light transition-colors"
+          disabled={loading}
         >
           <Icon name="ChevronLeft" size={18} />
           <span className="font-cormorant text-sm">Назад</span>
@@ -113,8 +132,14 @@ export default function RegisterPage({ onRegistered, onBack }: RegisterPageProps
               maxLength={20}
             />
             <p className="text-ink-faded text-xs font-cormorant">{login.length}/20 символов</p>
-            {error && <p className="text-aged-red text-sm italic font-cormorant">{error}</p>}
-            <button className="ink-btn w-full py-3 rounded-sm" onClick={handleLoginNext}>
+            {error && (
+              <p className="text-aged-red text-sm italic font-cormorant animate-fade-in">{error}</p>
+            )}
+            <button
+              className="ink-btn w-full py-3 rounded-sm"
+              onClick={handleLoginNext}
+              disabled={loading}
+            >
               Далее
             </button>
           </div>
@@ -126,7 +151,9 @@ export default function RegisterPage({ onRegistered, onBack }: RegisterPageProps
             <p className="text-ink-faded text-sm font-cormorant italic text-center">
               6 цифр — ваш ключ к книге
             </p>
-            {error && <p className="text-aged-red text-sm italic font-cormorant">{error}</p>}
+            {error && (
+              <p className="text-aged-red text-sm italic font-cormorant animate-fade-in">{error}</p>
+            )}
             <PinInput
               label="Введите 6-значный пин-код"
               onComplete={handlePinSet}
@@ -140,7 +167,9 @@ export default function RegisterPage({ onRegistered, onBack }: RegisterPageProps
             <p className="text-ink-faded text-sm font-cormorant italic text-center">
               Повторите для надёжности
             </p>
-            {error && <p className="text-aged-red text-sm italic font-cormorant animate-fade-in">{error}</p>}
+            {error && (
+              <p className="text-aged-red text-sm italic font-cormorant animate-fade-in">{error}</p>
+            )}
             <PinInput
               label="Повторите пин-код"
               onComplete={handlePinConfirm}
@@ -156,11 +185,14 @@ export default function RegisterPage({ onRegistered, onBack }: RegisterPageProps
             </p>
 
             <div className="flex flex-col gap-2">
-              <label className="text-ink-faded text-xs tracking-widest uppercase font-cormorant">Вопрос</label>
+              <label className="text-ink-faded text-xs tracking-widest uppercase font-cormorant">
+                Вопрос
+              </label>
               <select
                 className="vintage-input w-full px-3 py-3 rounded-sm appearance-none cursor-pointer"
                 value={question}
                 onChange={e => setQuestion(e.target.value)}
+                disabled={loading}
               >
                 {SECURITY_QUESTIONS.map(q => (
                   <option key={q} value={q}>{q}</option>
@@ -169,7 +201,9 @@ export default function RegisterPage({ onRegistered, onBack }: RegisterPageProps
             </div>
 
             <div className="flex flex-col gap-2">
-              <label className="text-ink-faded text-xs tracking-widest uppercase font-cormorant">Ответ</label>
+              <label className="text-ink-faded text-xs tracking-widest uppercase font-cormorant">
+                Ответ
+              </label>
               <input
                 className="vintage-input w-full px-3 py-3 rounded-sm"
                 placeholder="Ваш ответ..."
@@ -177,10 +211,14 @@ export default function RegisterPage({ onRegistered, onBack }: RegisterPageProps
                 onChange={e => { setAnswer(e.target.value); setError(''); }}
                 autoComplete="off"
                 autoCapitalize="off"
+                disabled={loading}
+                onKeyDown={e => e.key === 'Enter' && handleFinish()}
               />
             </div>
 
-            {error && <p className="text-aged-red text-sm italic font-cormorant">{error}</p>}
+            {error && (
+              <p className="text-aged-red text-sm italic font-cormorant animate-fade-in">{error}</p>
+            )}
 
             <div className="sepia-card p-3 rounded-sm">
               <p className="text-xs font-cormorant text-ink-faded italic flex items-start gap-2">
@@ -189,9 +227,20 @@ export default function RegisterPage({ onRegistered, onBack }: RegisterPageProps
               </p>
             </div>
 
-            <button className="ink-btn w-full py-3 rounded-sm" onClick={handleFinish}>
-              Открыть Фолиант
-            </button>
+            {loading ? (
+              <div className="w-full py-3 flex items-center justify-center gap-2">
+                <Icon name="Loader" size={16} className="text-ink-faded animate-spin" />
+                <span className="font-cormorant text-ink-faded italic text-sm">Создаём запись...</span>
+              </div>
+            ) : (
+              <button
+                className="ink-btn w-full py-3 rounded-sm"
+                onClick={handleFinish}
+                disabled={loading}
+              >
+                Открыть Фолиант
+              </button>
+            )}
           </div>
         )}
       </div>

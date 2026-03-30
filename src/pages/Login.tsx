@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import PinInput from '@/components/PinInput';
-import { getUser, hashPin, setCurrentUser } from '@/lib/store';
+import { hashPin } from '@/lib/store';
+import { apiLogin } from '@/lib/api';
 import Icon from '@/components/ui/icon';
 
 interface LoginPageProps {
@@ -14,24 +15,37 @@ export default function LoginPage({ onLogin, onRegister }: LoginPageProps) {
   const [step, setStep] = useState<Step>('login');
   const [login, setLogin] = useState('');
   const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
 
   const handleLoginSubmit = () => {
     const trimmed = login.trim();
-    if (!trimmed) { setError('Введите имя пользователя'); return; }
-    const user = getUser(trimmed);
-    if (!user) { setError('Пользователь не найден'); return; }
+    if (!trimmed) {
+      setError('Введите имя пользователя');
+      return;
+    }
     setError('');
     setStep('pin');
   };
 
-  const handlePin = (pin: string) => {
-    const user = getUser(login.trim());
-    if (!user) return;
-    if (hashPin(pin) === user.pinHash) {
-      setCurrentUser(login.trim());
-      onLogin(login.trim());
-    } else {
-      setError('Неверный пин-код');
+  const handlePin = async (pin: string) => {
+    setLoading(true);
+    setError('');
+    try {
+      const data = await apiLogin(login.trim(), hashPin(pin));
+      if (data.textColor) {
+        localStorage.setItem(`folio_color_${data.login}`, data.textColor);
+      }
+      onLogin(data.login);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes('404') || msg.toLowerCase().includes('не найден') || msg.toLowerCase().includes('not found')) {
+        setError('Пользователь не найден');
+        setStep('login');
+      } else {
+        setError('Неверный пин-код');
+      }
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -41,7 +55,9 @@ export default function LoginPage({ onLogin, onRegister }: LoginPageProps) {
       <div className="header-bar px-6 pt-12 pb-8 text-center">
         <div className="animate-flicker mb-2 text-3xl">📜</div>
         <h1 className="font-uncial text-2xl text-sepia-light tracking-wider">Фолиант</h1>
-        <p className="text-ink-faded text-xs tracking-[0.2em] uppercase mt-1 font-cormorant">Тайный мессенджер</p>
+        <p className="text-ink-faded text-xs tracking-[0.2em] uppercase mt-1 font-cormorant">
+          Тайный мессенджер
+        </p>
         <div className="mt-3 flex justify-center">
           <span className="shield-badge">E2E ЗАЩИТА · IP СКРЫТ</span>
         </div>
@@ -75,6 +91,7 @@ export default function LoginPage({ onLogin, onRegister }: LoginPageProps) {
             <button
               className="ink-btn w-full py-3 rounded-sm mt-2"
               onClick={handleLoginSubmit}
+              disabled={loading}
             >
               Открыть книгу
             </button>
@@ -84,6 +101,7 @@ export default function LoginPage({ onLogin, onRegister }: LoginPageProps) {
             <button
               className="ghost-btn w-full py-3 rounded-sm"
               onClick={onRegister}
+              disabled={loading}
             >
               Создать новую запись
             </button>
@@ -95,6 +113,7 @@ export default function LoginPage({ onLogin, onRegister }: LoginPageProps) {
             <button
               onClick={() => { setStep('login'); setError(''); }}
               className="self-start flex items-center gap-2 text-ink-faded text-sm font-cormorant hover:text-ink transition-colors"
+              disabled={loading}
             >
               <Icon name="ChevronLeft" size={16} />
               Назад
@@ -103,14 +122,26 @@ export default function LoginPage({ onLogin, onRegister }: LoginPageProps) {
             <div className="ornament-line w-full font-fell text-sm">Пин-код</div>
 
             <p className="font-cormorant text-ink-light italic text-center">
-              Добро пожаловать, <span className="font-medium text-ink">{login}</span>
+              Добро пожаловать,{' '}
+              <span className="font-medium text-ink">{login}</span>
             </p>
 
-            <PinInput
-              label="Введите ваш пин-код"
-              onComplete={handlePin}
-              error={error}
-            />
+            {loading && (
+              <p className="text-ink-faded text-sm font-cormorant italic animate-fade-in">
+                Проверяем ключ...
+              </p>
+            )}
+
+            {error && (
+              <p className="text-aged-red text-sm italic font-cormorant animate-fade-in">{error}</p>
+            )}
+
+            {!loading && (
+              <PinInput
+                label="Введите ваш пин-код"
+                onComplete={handlePin}
+              />
+            )}
           </div>
         )}
       </div>

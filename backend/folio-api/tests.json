@@ -1,0 +1,43 @@
+{
+  "tests": [
+    {
+      "name": "OPTIONS preflight",
+      "method": "OPTIONS",
+      "path": "/",
+      "expectedStatus": 200
+    },
+    {
+      "name": "Register new user",
+      "method": "POST",
+      "path": "/?action=register",
+      "body": {
+        "login": "test_folio_001",
+        "pinHash": "abc123testhash",
+        "securityQuestion": "Имя питомца?",
+        "securityAnswer": "шарик",
+        "textColor": "#2c1f0e"
+      },
+      "expectedStatus": 200,
+      "expectedBody": {"token": "string"},
+      "bodyMatcher": "partial"
+    },
+    {
+      "name": "Login user",
+      "method": "POST",
+      "path": "/?action=login",
+      "body": {
+        "login": "test_folio_001",
+        "pinHash": "abc123testhash"
+      },
+      "expectedStatus": 200,
+      "expectedBody": {"token": "string"},
+      "bodyMatcher": "partial"
+    },
+    {
+      "name": "Unknown route",
+      "method": "GET",
+      "path": "/?action=unknown_xyz",
+      "expectedStatus": 404
+    }
+  ]
+}
